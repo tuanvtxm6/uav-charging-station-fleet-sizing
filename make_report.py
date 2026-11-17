@@ -4,13 +4,18 @@
 Chạy sau `python uav_station_fleet.py experiment`."""
 import json
 import os
+import re
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 from docx import Document
 from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
-from docx.shared import Cm, Pt, RGBColor
+from docx.shared import Cm, Inches, Pt, RGBColor
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(ROOT, "results")
@@ -46,7 +51,41 @@ for name, size in (("Heading 1", 15), ("Heading 2", 13.5)):
 for name in ("List Bullet", "List Number"):
     _font(doc.styles[name], 13)
 
-_counter = {"tab": 0, "fig": 0}
+_counter = {"tab": 0, "fig": 0, "eq": 0}
+plt.rcParams["mathtext.fontset"] = "stix"
+EQ_DIR = os.path.join(OUT, "eq")
+os.makedirs(EQ_DIR, exist_ok=True)
+
+# ký hiệu toán trong câu văn: w_i -> w với chỉ số dưới i, f1 -> f với chỉ số 1, ^|J| -> mũ
+_TOK = re.compile(r"(?<![A-Za-z0-9_])([A-Za-zλτ])_([A-Za-zà-ỹ0-9]+)"
+                  r"|(?<![A-Za-z0-9])f([123])(?![0-9])|\^(\|J\|)")
+
+
+def add_text(p, text, bold=False, italic=False, size=None):
+    """Thêm text vào đoạn p; **...** thành chữ đậm, ký hiệu toán có chỉ số dưới/trên."""
+    def run(t, sub=False, sup=False, b=False):
+        if not t:
+            return
+        r = p.add_run(t)
+        r.bold, r.italic = b, italic
+        r.font.subscript, r.font.superscript = sub, sup
+        if size:
+            r.font.size = Pt(size)
+
+    for k, part in enumerate(str(text).split("**")):
+        b, pos = bold or k % 2 == 1, 0
+        for m in _TOK.finditer(part):
+            run(part[pos:m.start()], b=b)
+            if m.group(1):
+                run(m.group(1), b=b)
+                run(m.group(2), sub=True, b=b)
+            elif m.group(3):
+                run("f", b=b)
+                run(m.group(3), sub=True, b=b)
+            else:
+                run(m.group(4), sup=True, b=b)
+            pos = m.end()
+        run(part[pos:], b=b)
 
 
 def para(text, align=WD_ALIGN_PARAGRAPH.JUSTIFY, size=None, italic=False, bold=False,
@@ -58,14 +97,7 @@ def para(text, align=WD_ALIGN_PARAGRAPH.JUSTIFY, size=None, italic=False, bold=F
         p.paragraph_format.first_line_indent = Cm(0.8)
     if after is not None:
         p.paragraph_format.space_after = Pt(after)
-    for k, part in enumerate(text.split("**")):
-        if not part:
-            continue
-        r = p.add_run(part)
-        r.bold = bold or k % 2 == 1
-        r.italic = italic
-        if size:
-            r.font.size = Pt(size)
+    add_text(p, text, bold=bold, italic=italic, size=size)
     return p
 
 
@@ -74,21 +106,32 @@ def bullets(items, style="List Bullet"):
         p = doc.add_paragraph(style=style)
         p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
         p.paragraph_format.space_after = Pt(3)
-        for k, part in enumerate(it.split("**")):
-            if part:
-                p.add_run(part).bold = k % 2 == 1
+        add_text(p, it)
 
 
-def formula(lines):
-    for ln in lines:
+def formula(items):
+    """Mỗi phần tử là (công thức dạng LaTeX, chú thích); công thức được dựng thành ảnh."""
+    for tex, note in items:
+        _counter["eq"] += 1
+        path = os.path.join(EQ_DIR, f"eq{_counter['eq']:02d}.png")
+        fig = plt.figure(figsize=(0.1, 0.1))
+        fig.text(0, 0, f"${tex}$", fontsize=13)
+        fig.savefig(path, dpi=300, bbox_inches="tight", pad_inches=0.02)
+        plt.close(fig)
         p = doc.add_paragraph()
         p.alignment = WD_ALIGN_PARAGRAPH.LEFT
         p.paragraph_format.left_indent = Cm(1.5)
-        p.paragraph_format.space_after = Pt(2)
-        r = p.add_run(ln)
-        r.font.name = "Cambria Math"
-        r.font.size = Pt(12)
-    doc.paragraphs[-1].paragraph_format.space_after = Pt(8)
+        p.paragraph_format.space_after = Pt(6)
+        p.paragraph_format.keep_with_next = True
+        p.add_run().add_picture(path, width=Inches(plt.imread(path).shape[1] / 300))
+        if note:
+            r = p.add_run("      (" + note + ")")
+            r.font.size = Pt(12)
+    doc.paragraphs[-1].paragraph_format.keep_with_next = False
+    doc.paragraphs[-1].paragraph_format.space_after = Pt(10)
+
+
+_SS = r"\sum_{i \in I}\;\;\sum_{j \in J}\,"
 
 
 def _shade(cell, hexcolor):
@@ -119,9 +162,7 @@ def table(caption, header, rows, widths, size=10.5, bold_col=None, align_left=(0
             p.paragraph_format.line_spacing = 1.0
             p.alignment = (WD_ALIGN_PARAGRAPH.LEFT if k in align_left
                            else WD_ALIGN_PARAGRAPH.CENTER)
-            r = p.add_run(str(val))
-            r.font.size = Pt(size)
-            r.bold = row is header or k == bold_col
+            add_text(p, val, bold=row is header or k == bold_col, size=size)
             if row is header:
                 _shade(cell, "DCE3EE")
     doc.add_paragraph().paragraph_format.space_after = Pt(2)
@@ -259,21 +300,24 @@ bullets([
 H2("3.2. Hàm mục tiêu")
 para("Ba mục tiêu cùng được cực tiểu hóa:")
 formula([
-    "f1 = Σ_i Σ_j w_i · (d_ij / v) · x_ij  /  Σ_i Σ_j w_i · x_ij",
-    "f2 = Σ_i Σ_j λ_i · 2e · d_ij · x_ij",
-    "f3 = 1 − ( Σ_i Σ_j w_i · x_ij ) / Σ_i w_i",
+    (r"f_1 \;=\; \frac{" + _SS + r"w_i\,t_{ij}\,x_{ij}}{" + _SS + r"w_i\,x_{ij}}\,,"
+     r"\qquad t_{ij} = \frac{d_{ij}}{v}", ""),
+    (r"f_2 \;=\; " + _SS + r"2\,e\,\lambda_i\,d_{ij}\,x_{ij}", ""),
+    (r"f_3 \;=\; 1 \;-\; \frac{" + _SS + r"w_i\,x_{ij}}{\sum_{i \in I} w_i}", ""),
 ])
-para("f1 là thời gian phản ứng trung bình có trọng số rủi ro của các điểm được phủ, f2 "
+para("Trong đó t_ij là thời gian bay từ trạm j tới điểm i. "
+     "f1 là thời gian phản ứng trung bình có trọng số rủi ro của các điểm được phủ, f2 "
      "là tổng năng lượng bay trong một chu kỳ, f3 là tỉ lệ rủi ro không được phủ. f1 "
      "được lấy trung bình trên phần được phủ để tách khỏi f2 (vốn tỉ lệ với tổng quãng "
      "đường); phần chưa phủ đã được phản ánh qua f3.")
 H2("3.3. Ràng buộc")
 formula([
-    "Σ_j x_ij ≤ 1,  ∀i                                   (mỗi điểm thuộc tối đa một trạm)",
-    "2 · d_ij · x_ij ≤ R,  ∀i, j                         (tầm bay của pin)",
-    "Σ_i λ_i · (2·d_ij / v + τ) · x_ij ≤ n_j · T,  ∀j    (năng lực đội bay tại trạm)",
-    "n_j ≤ U_max · y_j,  ∀j                              (sức chứa trạm)",
-    "c_s · Σ_j y_j + c_u · Σ_j n_j ≤ B                   (ngân sách)",
+    (r"\sum_{j \in J} x_{ij} \;\leq\; 1 \qquad \forall\, i", "mỗi điểm thuộc tối đa một trạm"),
+    (r"2\,d_{ij}\,x_{ij} \;\leq\; R \qquad \forall\, i,\, j", "tầm bay của pin"),
+    (r"\sum_{i \in I} \lambda_i \left( \frac{2\,d_{ij}}{v} + \tau \right) x_{ij} \;\leq\; n_j\,T"
+     r" \qquad \forall\, j", "năng lực đội bay tại trạm"),
+    (r"n_j \;\leq\; U_{\mathrm{max}}\,y_j \qquad \forall\, j", "sức chứa trạm"),
+    (r"c_s \sum_{j \in J} y_j \;+\; c_u \sum_{j \in J} n_j \;\leq\; B", "ngân sách"),
 ])
 H2("3.4. Độ phức tạp")
 para("Khi bỏ ràng buộc năng lực và chỉ giữ mục tiêu f3, bài toán trở thành MCLP, vốn "

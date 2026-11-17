@@ -9,3 +9,6 @@ results/experiment.log
 
 # tài liệu đề bài của học phần, không thuộc repo này
 15 Huong nghien cuu bai tap mon hoc.docx
+
+# ảnh công thức sinh tự động khi chạy make_report.py
+results/eq/
