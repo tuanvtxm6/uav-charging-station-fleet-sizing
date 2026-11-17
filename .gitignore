@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+~$*.docx
+.claude/
+
+# dữ liệu thô của các lần chạy (tái tạo bằng: python uav_station_fleet.py experiment)
+results/raw.pkl
+results/experiment.log
+
+# tài liệu đề bài của học phần, không thuộc repo này
+15 Huong nghien cuu bai tap mon hoc.docx
